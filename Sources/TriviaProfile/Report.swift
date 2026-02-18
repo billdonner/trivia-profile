@@ -14,8 +14,16 @@ struct ReportData: Codable {
     struct SummarySection: Codable {
         let totalQuestions: Int
         let fileSize: String
-        let format: String
+        let fileCount: Int
+        let files: [FileDetail]?
         let generatedDate: String?
+    }
+
+    struct FileDetail: Codable {
+        let name: String
+        let questionCount: Int
+        let fileSize: String
+        let format: String
     }
 
     struct CategoryEntry: Codable {
@@ -61,14 +69,15 @@ struct ReportData: Codable {
 struct ReportGenerator {
     static func generate(
         from questions: [ProfiledQuestion],
-        format: DataFormat,
+        fileDetails: [ReportData.FileDetail],
+        totalFileSize: Int,
         generated: Date?,
-        fileSize: Int
+        hasDifficulty: Bool
     ) -> ReportData {
-        let summary = makeSummary(questions: questions, format: format, generated: generated, fileSize: fileSize)
+        let summary = makeSummary(questions: questions, fileDetails: fileDetails, totalFileSize: totalFileSize, generated: generated)
         let categories = makeCategories(questions)
         let sources = makeSources(questions)
-        let difficulty = makeDifficulty(questions, format: format)
+        let difficulty = makeDifficulty(questions, hasDifficulty: hasDifficulty)
         let hints = makeHints(questions)
         let questionLength = makeQuestionLength(questions)
         let answerStats = makeAnswerStats(questions)
@@ -86,12 +95,11 @@ struct ReportGenerator {
 
     private static func makeSummary(
         questions: [ProfiledQuestion],
-        format: DataFormat,
-        generated: Date?,
-        fileSize: Int
+        fileDetails: [ReportData.FileDetail],
+        totalFileSize: Int,
+        generated: Date?
     ) -> ReportData.SummarySection {
-        let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
-        let formatStr = format == .gameData ? "Game Data (challenges)" : "Raw (question array)"
+        let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(totalFileSize), countStyle: .file)
         var dateStr: String? = nil
         if let generated {
             let fmt = DateFormatter()
@@ -99,7 +107,13 @@ struct ReportGenerator {
             fmt.timeStyle = .short
             dateStr = fmt.string(from: generated)
         }
-        return .init(totalQuestions: questions.count, fileSize: sizeStr, format: formatStr, generatedDate: dateStr)
+        return .init(
+            totalQuestions: questions.count,
+            fileSize: sizeStr,
+            fileCount: fileDetails.count,
+            files: fileDetails.count > 1 ? fileDetails : nil,
+            generatedDate: dateStr
+        )
     }
 
     private static func makeCategories(_ questions: [ProfiledQuestion]) -> [ReportData.CategoryEntry] {
@@ -118,7 +132,7 @@ struct ReportGenerator {
         }
     }
 
-    private static func makeDifficulty(_ questions: [ProfiledQuestion], format: DataFormat) -> [ReportData.DifficultyEntry]? {
+    private static func makeDifficulty(_ questions: [ProfiledQuestion], hasDifficulty: Bool) -> [ReportData.DifficultyEntry]? {
         let withDifficulty = questions.compactMap(\.difficulty)
         guard !withDifficulty.isEmpty else { return nil }
         let counts = Dictionary(grouping: withDifficulty, by: { $0 }).mapValues(\.count)
@@ -198,11 +212,16 @@ struct TextRenderer {
         var lines = [
             header("Summary"),
             "  Total questions : \(s.totalQuestions)",
-            "  File size       : \(s.fileSize)",
-            "  Format          : \(s.format)",
+            "  Total file size : \(s.fileSize)",
+            "  Files           : \(s.fileCount)",
         ]
+        if let files = s.files {
+            for f in files {
+                lines.append("    \(f.name.padding(toLength: 28, withPad: " ", startingAt: 0))  \(String(format: "%5d", f.questionCount)) questions  \(f.fileSize.padding(toLength: 8, withPad: " ", startingAt: 0))  \(f.format)")
+            }
+        }
         if let date = s.generatedDate {
-            lines.append("  Generated       : \(date)")
+            lines.append("  Latest generated: \(date)")
         }
         lines.append("")
         return lines.joined(separator: "\n")
@@ -234,7 +253,7 @@ struct TextRenderer {
     private static func renderDifficulty(_ diff: [ReportData.DifficultyEntry]?) -> String {
         var lines = [header("Difficulty")]
         guard let diff, !diff.isEmpty else {
-            lines.append("  (not available in this format)")
+            lines.append("  (not available — game data format has no difficulty field)")
             lines.append("")
             return lines.joined(separator: "\n")
         }
